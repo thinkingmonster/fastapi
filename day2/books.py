@@ -174,7 +174,7 @@ def get_books():
     return BOOKS
 
 
-@app.post("/create-book", status_code=status.HTTP_200_OK)
+@app.post("/create-book", status_code=status.HTTP_201_CREATED)
 async def create_book(book_request: BookRequest):
     new_book = Books(**book_request.model_dump())
     new_book.id = 1 if len(BOOKS) == 0 else BOOKS[-1].id + 1
@@ -229,8 +229,8 @@ async def get_books_by_rating(
 # Update book
 @app.put(
     "/books/update_book",
-    status_code=status.HTTP_201_OK,
-    description="Updates abook if exists",
+    status_code=status.HTTP_200_OK,
+    description="Updates a book if exists",
 )
 async def update_books(book: BookRequest):
     for i, item in enumerate(BOOKS):
