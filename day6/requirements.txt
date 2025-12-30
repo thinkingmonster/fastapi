@@ -1,0 +1,15 @@
+# FastAPI Core
+fastapi==0.128.0
+uvicorn[standard]==0.40.0
+
+# Database
+SQLAlchemy==2.0.45
+
+# Authentication & Security
+bcrypt==5.0.0
+python-jose[cryptography]==3.5.0
+python-multipart==0.0.21
+
+# Note: passlib is NOT included as we use bcrypt directly
+# This avoids compatibility issues with bcrypt 5.0.0
+

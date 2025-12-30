@@ -1,12 +1,12 @@
 from database import SessionLocal
 from datetime import timedelta, datetime, timezone
 from typing import Annotated
-from sqlalchemy.orm import Session, session
+from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.engine import create
 from models import Users
-from passlib.context import CryptContext
+import bcrypt
 from fastapi.security import OAuth2PasswordRequestForm, OAuth2PasswordBearer
 from jose import jwt, JWTError
 
@@ -16,7 +16,8 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 SECRET_KEY = "9b2468f687b8e512948ff1811854779f9a5dd772635513c9df497e359bc1176b"
 ALGORITHM = "HS256"
 
-bcrypt_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Bcrypt configuration
+BCRYPT_ROUNDS = 12
 oauth2_bearer = OAuth2PasswordBearer(tokenUrl="auth/token")
 
 
@@ -43,7 +44,7 @@ def create_access_token(username: str, user_id: int, expires_delta: timedelta):
     return jwt.encode(encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
-def authenticate_user(username: str, password: str, db: session):
+def authenticate_user(username: str, password: str, db: Session):
     """
     Authenticates a user by verifying username and password.
     Returns the User object if credentials are valid, False otherwise.
@@ -51,9 +52,22 @@ def authenticate_user(username: str, password: str, db: session):
     user = db.query(Users).filter(Users.username == username).first()
     if not user:
         return False
-    if not bcrypt_context.verify(password, user.hashed_password):
+    try:
+        # Verify password using bcrypt
+        # Both password and hash need to be bytes
+        password_bytes = password.encode('utf-8')
+        hash_bytes = user.hashed_password.encode('utf-8')
+        if not bcrypt.checkpw(password_bytes, hash_bytes):
+            return False
+        # Ensure user attributes are loaded (access them to trigger lazy loading if needed)
+        _ = user.id, user.username
+        return user
+    except Exception as e:
+        # Log error for debugging (in production, use proper logging)
+        print(f"Authentication error: {e}")
+        import traceback
+        traceback.print_exc()
         return False
-    return user
 
 
 db_dependency = Annotated[Session, Depends(get_db)]
@@ -89,13 +103,19 @@ async def create_user(db: db_dependency, create_user_request: CreateUserRequest)
     Register a new user account.
     Hashes the password using bcrypt before storing in database.
     """
+    # Hash password using bcrypt
+    hashed_password = bcrypt.hashpw(
+        create_user_request.password.encode('utf-8'),
+        bcrypt.gensalt(rounds=BCRYPT_ROUNDS)
+    ).decode('utf-8')
+    
     create_user_model = Users(
         email=create_user_request.email,
         username=create_user_request.username,
         first_name=create_user_request.first_name,
         last_name=create_user_request.last_name,
         role=create_user_request.role,
-        hashed_password=bcrypt_context.hash(create_user_request.password),
+        hashed_password=hashed_password,
         is_active=True,
     )
     db.add(create_user_model)
@@ -111,14 +131,30 @@ async def login_for_access_token(
     OAuth2 compatible login endpoint that returns a JWT access token.
     Validates user credentials and returns token valid for 20 minutes.
     """
-    user = authenticate_user(form_data.username, form_data.password, db)
-    if not user:
+    try:
+        user = authenticate_user(form_data.username, form_data.password, db)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Could not validate credentials",
+            )
+        # Extract user attributes while session is still active
+        username = user.username
+        user_id = user.id
+        token = create_access_token(username, user_id, timedelta(minutes=20))
+        return {"access_token": token, "token_type": "bearer"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Log the actual error for debugging
+        import traceback
+        error_msg = f"Login error: {type(e).__name__}: {e}"
+        print(error_msg)
+        traceback.print_exc()
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal server error: {str(e)}",
         )
-    token = create_access_token(user.username, user.id, timedelta(minutes=20))
-    return {"access_token": token, "token_type": "bearer"}
 
 
 async def get_current_user(token: Annotated[str, Depends(oauth2_bearer)]):
